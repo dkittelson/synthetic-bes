@@ -1,0 +1,8 @@
+runs/
+inference_results/
+__pycache__/
+*.pyc
+*.h5
+*.pt
+.pytest_cache/
+.DS_Store
