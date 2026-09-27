@@ -44,9 +44,25 @@ def load_runs(runs_dir: Path) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def aggregate(df: pd.DataFrame) -> pd.DataFrame:
+def honest_train_minutes(runs_dir: Path, variant: str, seed) -> float:
+    """Sum of per-epoch train_s from history.csv, NOT metrics.json's total_s.
+
+    On an unattended overnight sweep, macOS can enter periodic "Maintenance
+    Sleep" that `caffeinate -i` does not block (that flag only prevents idle
+    sleep from inactivity). Two runs in this sweep spanned that window and
+    each sleep/wake cycle added minutes of wall time to total_s without any
+    extra epochs or slower per-epoch compute. Per-epoch train_s stayed stable
+    throughout, so summing it is the honest number; total_s is not.
+    """
+    hist = Path(runs_dir) / variant / f"seed{seed}" / "history.csv"
+    return pd.read_csv(hist)["train_s"].sum() / 60.0
+
+
+def aggregate(df: pd.DataFrame, runs_dir: Path) -> pd.DataFrame:
     """One row per variant: mean over seeds, plus std and seed count."""
-    keys = list(COLS) + ["params", "best_epoch", "total_s", "train_s_per_epoch"]
+    df = df.copy()
+    df["train_min"] = [honest_train_minutes(runs_dir, r.variant, r.seed) for r in df.itertuples()]
+    keys = list(COLS) + ["params", "best_epoch", "train_min"]
     g = df.groupby("variant")
     mean, std = g[keys].mean(), g[keys].std(ddof=1)
     out = mean.copy()
@@ -80,7 +96,7 @@ def build(agg: pd.DataFrame):
                     cells.append(f"{(r[k] - base[k]) * 100:+.2f}")
                 else:
                     cells.append(f"{(r[k] / base[k] - 1) * 100:+.1f}%")
-        cells += [f"{r.best_epoch:.0f}", f"{r.total_s / 60:.1f}"]
+        cells += [f"{r.best_epoch:.0f}", f"{r.train_min:.1f}"]
         rows.append(cells)
     return header, rows
 
@@ -122,7 +138,7 @@ def main():
     p.add_argument("--out-dir", type=Path, default=ROOT)
     args = p.parse_args()
 
-    agg = aggregate(load_runs(args.runs_dir))
+    agg = aggregate(load_runs(args.runs_dir), args.runs_dir)
     header, rows = build(agg)
     cap = caption(agg)
     args.out_dir.mkdir(parents=True, exist_ok=True)
